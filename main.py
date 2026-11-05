@@ -24,9 +24,10 @@ HF_TOKEN = os.getenv("hf_token")
 
 global_fs = HfFileSystem(token=HF_TOKEN)
 
-# --- SPEED UPGRADE: Pre-define the exact 10 file paths ---
-# This skips the slow glob/listing operation on Hugging Face
-FILE_LIST = [f"datasets/{REPO_ID}/final_master_shard_{i}.parquet" for i in range(10)]
+# --- SPEED UPGRADE ---
+# FIXED: Use the correct 'buckets' prefix for Hugging Face Buckets
+# The path format for HfFileSystem is 'buckets/{username}/{bucket_name}/{file}'
+FILE_LIST = [f"buckets/{REPO_ID}/final_master_shard_{i}.parquet" for i in range(10)]
 
 @app.get("/")
 def root():
@@ -43,7 +44,7 @@ def search(mobile: str = Query(..., description="10-digit mobile number")):
                 media_type="application/json"
             )
 
-        # Load the dataset using the pre-defined list
+        # Load the dataset using the pre-defined list and the HfFileSystem object
         dataset = ds.dataset(FILE_LIST, filesystem=global_fs, format="parquet")
         
         # Filter for the exact mobile number
