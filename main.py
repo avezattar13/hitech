@@ -57,7 +57,7 @@ def search(mobile: str = Query(..., description="10-digit mobile number")):
         
         response_data = {
             "meta": {
-                "credits": "Avez",
+                "credits": "made by Avez",
                 "search_query": mobile,
                 "total_records": len(raw_records),
                 "execution_time": f"{elapsed:.3f}s"
