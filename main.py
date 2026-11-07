@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 import pyarrow.dataset as ds
@@ -22,38 +22,64 @@ app.add_middleware(
 REPO_ID = "avezattar/Hitek-bucket" 
 HF_TOKEN = os.getenv("hf_token") 
 
+# --- API KEY CONFIGURATION ---
+# Fetch the keys from Vercel env var, split by comma, and strip whitespace
+RAW_KEYS = os.getenv("api_keys", "")
+VALID_API_KEYS = [k.strip() for k in RAW_KEYS.split(",") if k.strip()]
+
 global_fs = HfFileSystem(token=HF_TOKEN)
 
-# --- SPEED UPGRADE ---
-# FIXED: Use the correct 'buckets' prefix for Hugging Face Buckets
-# The path format for HfFileSystem is 'buckets/{username}/{bucket_name}/{file}'
 FILE_LIST = [f"buckets/{REPO_ID}/final_master_shard_{i}.parquet" for i in range(10)]
 
 @app.get("/")
 def root():
     return {"status": "online", "message": "Hitek API is Live."}
 
-@app.get("/search")
-def search(mobile: str = Query(..., description="10-digit mobile number")):
+# The path expects: /api_key=YOUR_KEY&search
+# We capture the key using a path parameter before the &search part
+@app.get("/api_key={api_key}&search")
+def search(
+    request: Request, 
+    api_key: str, 
+    mobile: str = Query(..., description="10-digit mobile number")
+):
     start_time = time.time()
     
+    # 1. Validate API Key
+    if not VALID_API_KEYS or api_key not in VALID_API_KEYS:
+        return Response(
+            content=json.dumps({"error": "Unauthorized. Invalid or missing API key."}, indent=4), 
+            media_type="application/json",
+            status_code=401
+        )
+
     try:
         if len(mobile) != 10 or not mobile.isdigit():
             return Response(
                 content=json.dumps({"error": "Please provide a valid 10-digit mobile number."}, indent=4), 
-                media_type="application/json"
+                media_type="application/json",
+                status_code=400
             )
 
-        # Load the dataset using the pre-defined list and the HfFileSystem object
         dataset = ds.dataset(FILE_LIST, filesystem=global_fs, format="parquet")
-        
-        # Filter for the exact mobile number
         filter_expr = pc.equal(pc.field("mobile"), mobile)
         
-        # use_threads=False prevents Vercel 1GB RAM OOM crash
-        table = dataset.scanner(filter=filter_expr, use_threads=False).head(5) 
-        raw_records = table.to_pylist()
+        # Pruning columns saves memory, batch size prevents OOM
+        columns_to_read = ["mobile", "name", "fname", "address", "alt", "circle", "id", "email"]
         
+        scanner = dataset.scanner(
+            filter=filter_expr,
+            columns=columns_to_read,
+            use_threads=False,
+            batch_size=1024 
+        )
+        
+        raw_records = []
+        for batch in scanner.to_batches():
+            if batch.num_rows > 0:
+                raw_records = batch.to_pylist()
+                break
+                
         elapsed = time.time() - start_time
         
         response_data = {
@@ -95,5 +121,6 @@ def search(mobile: str = Query(..., description="10-digit mobile number")):
     except Exception as e:
         return Response(
             content=json.dumps({"error": str(e)}, indent=4), 
-            media_type="application/json"
+            media_type="application/json",
+            status_code=500
         )
